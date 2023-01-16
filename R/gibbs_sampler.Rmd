@@ -1,0 +1,485 @@
+---
+title: "Bayesian Statistics"
+subtitle: "Assignment"
+output: html_notebook
+---
+
+```{r}
+# set seed for reproducibility
+set.seed(123)
+
+# import the data
+data <- read.csv("round9.csv")
+```
+
+```{r}
+# conditional posterior for b0 
+sample.b0 <- function(b1, b2, b3, tau, mu0, tau0, data) {
+  precision = tau0 + tau * nrow(data)
+  mean <- tau0 * mu0 + tau * sum(data$y - b1 * data$x1 - b2 * data$x2 - b3 * data$x3)
+  mean <- mean / precision
+  return(rnorm(1, mean = mean, sd = 1 / sqrt(precision)))
+}
+
+# conditional posterior for b1
+sample.b1 <- function(b0, b2, b3, tau, mu1, tau1, data) {
+  precision <- tau1 + tau * sum(data$x1 * data$x1)
+  mean <- tau1 * mu1 + tau * sum(data$x1 * (data$y - b0 - b2 * data$x2 - b3 * data$x3))
+  mean <- mean / precision 
+  return(rnorm(1, mean = mean, sd = 1 / sqrt(precision)))
+}
+
+# conditional posterior for b2
+sample.b2 <- function(b0, b1, b3, tau, mu2, tau2, data) {
+  precision <- tau2 + tau * sum(data$x2 * data$x2)
+  mean <- tau2 * mu2 + tau * sum(data$x2 * (data$y - b0 - b1 * data$x1 - b3 * data$x3))
+  mean <- mean / precision 
+  rnorm(1, mean = mean, sd = 1 / sqrt(precision))
+}
+
+# conditional posterior for b3
+sample.b3 <- function(b0, b1, b2, tau, mu3, tau3, data) {
+  precision <- tau3 + tau * sum(data$x3 * data$x3)
+  mean <- tau3 * mu3 + tau * sum(data$x3 * (data$y - b0 - b1 * data$x1 - b2 * data$x2))
+  mean <- mean / precision 
+  rnorm(1, mean = mean, sd = 1 / sqrt(precision))
+}
+
+# conditional posterior for tau
+sample.tau <- function(b0, b1, b2, b3, alpha0, beta0, data) {
+  shape <- alpha0 + nrow(data) / 2
+  resid <- data$y - b0 - b1 * data$x1 - b2 * data$x2 - b3 * data$x3
+  rate <- beta0 + sum(resid * resid) / 2
+  return(rgamma(1, shape = shape, scale = 1 / rate))
+}
+```
+
+```{r}
+# metropolis hastings algorithm for b1
+sample.b1.mh <- function(b0, b1, b2, b3, tau, data, nu10, mu10, tau10) {
+   # current and proposed values
+   b1.curr <- b1 
+   b1.prop <- b1 + rnorm(1, 0, 0.03)
+   
+   # current and proposed values
+   prec <- tau * sum(data$x1 * data$x1)
+   mean <- tau * sum((data$y - b0 - data$x2 * b2 - data$x3 * b3) * data$x1) / prec
+   
+   # likelihood 
+   curr.like <- dnorm(b1.curr, mean = mean, sd = 1 / sqrt(prec))
+   prop.like <- dnorm(b1.prop, mean = mean, sd = 1 / sqrt(prec))
+   
+   # priors
+   curr.prior <- (1 + (tau10 * (b1.curr - mu10)^2 / nu10))^(-(nu10 + 1) / 2)
+   prop.prior <- (1 + (tau10 * (b1.prop - mu10)^2 / nu10))^(-(nu10 + 1) / 2)
+   
+   # acceptance probability
+   a <- (prop.prior * prop.like) / (curr.prior * curr.like)
+   ifelse(a > runif(1), b1.prop, b1.curr)
+}
+```
+
+```{r}
+# gibbs sampler
+sampler <- function(data, init, parameters, n.burn = 1000, n.iter = 10000, 
+                    n.chains = 1, metropolis.hasting = FALSE, b3 = FALSE) {
+   
+   # list of matrices to store the results for each chain
+   samples <- replicate(n = n.chains, simplify = FALSE, expr = matrix(ncol = 
+                        length(parameters), nrow = n.burn + n.iter, 
+                        dimnames = list(NULL, parameters)))
+   
+   #  for every chain ... 
+   for (c in 1:n.chains) {
+      # ... insert the initial values
+      samples[[c]][1,] <- init[[c]]
+      
+      # for every iteration (plus burn-in) ... 
+      for (i in 2:(n.burn + n.iter)) {
+         # sample from the conditional posterior of b0
+         samples[[c]][i,"b0"] <- sample.b0(b1 = samples[[c]][i-1,"b1"], 
+                                           b2 = samples[[c]][i-1,"b2"],
+                                           b3 = samples[[c]][i-1,"b3"],
+                                           tau = samples[[c]][i-1,"tau"], 
+                                           mu0 = 0, 
+                                           tau0 = 1170, 
+                                           data = data)
+      
+         if (metropolis.hasting) {
+            # sample from the conditional posterior of b1
+            samples[[c]][i,"b1"] <- sample.b1.mh(b0 = samples[[c]][i,"b0"], 
+                                                 b1 = samples[[c]][i-1,"b1"], 
+                                                 b2 = samples[[c]][i-1,"b2"], 
+                                                 b3 = samples[[c]][i-1,"b3"], 
+                                                 tau = samples[[c]][i-1,"tau"], 
+                                                 data = data, 
+                                                 nu10 = 1681, 
+                                                 mu10 = 0.2456, 
+                                                 tau10 = 2500)
+         } else {
+            # sample from the conditional posterior of b1
+            samples[[c]][i,"b1"] <- sample.b1(b0 = samples[[c]][i,"b0"], 
+                                              b2 = samples[[c]][i-1,"b2"],
+                                              b3 = samples[[c]][i-1,"b3"],
+                                              tau = samples[[c]][i-1,"tau"], 
+                                              mu1 = 0.641, 
+                                              tau1 = 2750,
+                                              data = data)
+         }
+         # sample from the conditional posterior of b2
+         samples[[c]][i,"b2"] <- sample.b2(b0 = samples[[c]][i,"b0"], 
+                                           b1 = samples[[c]][i,"b1"],
+                                           b3 = samples[[c]][i-1,"b3"],
+                                           tau = samples[[c]][i-1,"tau"], 
+                                           mu2 = 0.01692, 
+                                           tau2 = 2150, 
+                                           data = data)
+         
+         if (b3) {
+            samples[[c]][i,"b3"] <- sample.b3(b0 = samples[[c]][i,"b0"], 
+                                              b1 = samples[[c]][i,"b1"],
+                                              b2 = samples[[c]][i,"b2"], 
+                                              tau = samples[[c]][i-1,"tau"], 
+                                              mu3 = 0.2456, 
+                                              tau3 = 2500, 
+                                              data = data)
+         } else {
+            samples[[c]][i,"b3"] <- 0
+         }
+         
+         # sample from the conditional posterior of tau
+         samples[[c]][i,"tau"] <- sample.tau(b0 = samples[[c]][i,"b0"], 
+                                             b1 = samples[[c]][i,"b1"],
+                                             b2 = samples[[c]][i,"b2"], 
+                                             b3 = samples[[c]][i,"b3"], 
+                                             alpha0 = 0.80, 
+                                             beta0 = 0.80, 
+                                             data = data)
+         
+      }
+      
+   }
+   
+   # store the results in a list and give it a 
+   result <- list(parameters = parameters, n.burn = n.burn, n.iter = n.iter, 
+                  n.chains = n.chains, init = init, samples = samples)
+   class(result) <- "gibbs.list"
+   return(result)
+}
+```
+
+```{r}
+# function that creates and prints the summary statistics
+summary.gibbs.list <- function(x) {
+   cat("Summary of My Gibbs Sampler \n\n")
+   cat(sprintf("Number of chains %d \n", x$n.chains))
+   cat(sprintf("Sample size per chain %d \n\n", x$n.iter))
+   
+   x.samples <- vector("list", x$n.chains)
+   for (c in 1:x$n.chains) {
+      x.samples[[c]] <- x$samples[[c]][-(1:x$n.burn),]
+   }
+   x.samples <- do.call("rbind", x.samples)
+   
+   estimates <- matrix(nrow = length(x$parameters), ncol = 3)
+   rownames(estimates) <- x$parameters
+   colnames(estimates) <- c("mean", "SD", "naive SE")
+   
+   estimates[,1] <- apply(x.samples, 2, mean)
+   estimates[,2] <- sqrt(apply(x.samples, 2, var))
+   estimates[,3] <- estimates[,2] / sqrt(x$n.iter * x$n.chains)
+   
+   cat("1. Empirical Estimates: \n\n")
+   print(round(estimates, 5))
+   
+   cat("\n 2. Quantiles for each variable: \n\n")
+   print(round(t(apply(x.samples, 2, quantile, probs = c(0.025, 0.25, 0.5, 0.75, 0.975))),3))
+   
+   invisible(x)
+}
+```
+
+```{r}
+# function that returns autocorrelation up till lag k for each chain in a list
+lag.gibbs.list <- function(x, n.lag = 40) {
+   # create a list of matrices to store autocorrelation (acf)
+   acf <- rep(list(matrix(nrow = n.lag+1, ncol = length(x$parameters))), x$n.chains)
+   
+   # for each chain get the samples, create columns with means, and variance
+   for (c in 1:x$n.chains) {
+      x.samples <- x$samples[[c]][-(1:x$n.burn),]
+      x.mean <- diag(apply(x.samples, 2, mean))
+      x.mean <- matrix(1, nrow = x$n.iter, ncol = length(x$parameters)) %*% x.mean
+      x.var <- apply(x.samples, 2, var)
+      
+      # for each lag derive the autocovariance 
+      for (lag in 0:n.lag) {
+         autocov <- (x.samples[1:(x$n.iter-lag),] - x.mean[1:(x$n.iter-lag),]) * 
+                    (x.samples[(1+lag):(x$n.iter),] - x.mean[(1+lag):(x$n.iter),])
+         acf[[c]][lag+1,] <- apply(autocov, 2, mean) / x.var
+      }
+   }
+   return(acf)
+}
+
+# function that plots the autocorrelation
+plot.lag <- function(x, titles = TRUE, print = TRUE, save = FALSE) {
+   suppressPackageStartupMessages(library(ggplot2))
+   x.lag <- lag(x)
+   
+   for (i in 1:length(x$parameters)) {
+      
+      r <- vector(mode = "list", length = x$n.chains)
+      for (c in 1:x$n.chains) { 
+         r[[c]] <- cbind(chain = c, x = 1:nrow(x.lag[[1]]) - 1, lag = x.lag[[c]][,i])
+      }
+      r <- do.call("rbind", r)
+      
+      p <- ggplot(data = as.data.frame(r), aes(x = x, y = lag, fill = as.factor(chain))) +
+         geom_bar(stat="identity", position="dodge", width = 0.4) + 
+         geom_hline(yintercept = -0.1, linetype="dotted", color = "black") +
+         geom_hline(yintercept = 0.1, linetype="dotted", color = "black") +
+         xlab("lag") + ylab("ACF") +
+         scale_fill_brewer(name = "chain", palette = "Set2", direction = -1) + 
+         theme_bw() + 
+         theme(legend.position="top") 
+      
+      if (titles) p <- p + ggtitle(x$parameters[i])
+      if (print) print(p)
+      if (save) ggsave(p, file=paste0("autocorrelation-", x$parameters[i], ".png"), 
+                       dpi = 300, width=5, height=3)
+   }
+}
+```
+
+```{r}
+# function that creates and plots trace plots
+plot.samples <- function(x, titles = TRUE, print = TRUE, save = FALSE) {
+   suppressPackageStartupMessages(library(ggplot2))
+   
+   for (i in 1:length(x$parameters)) {
+   
+   r <- vector(mode = "list", length = x$n.chains)
+   for (c in 1:x$n.chains) { 
+      r[[c]] <- cbind(chain = c, x = 1:x$n.iter, sample = x$samples[[c]][-(1:x$n.burn),i])
+   }
+   r <- do.call("rbind", r)
+   
+   p <- ggplot(data = as.data.frame(r), aes(x = x, y = sample, color = as.factor(chain))) +
+      geom_line() +
+      xlab("iteration") + ylab(x$parameters[i]) +
+      scale_color_brewer(name = "chain", palette = "Set2", direction = -1) + 
+      theme_bw() + 
+      theme(legend.position="top") 
+   
+   if (titles) p <- p + ggtitle(x$parameters[i])
+   if (print) print(p)
+   if (save) ggsave(p, file=paste0("trace-", x$parameters[i], ".png"), 
+                    dpi = 300, width=5, height=3)
+   }  
+}
+```
+
+```{r}
+# function that plots the posterior distributions
+plot.dist <- function(x, titles = TRUE, print = TRUE, save = FALSE) {
+   suppressPackageStartupMessages(library(ggplot2))
+   
+   for (i in 1:length(x$parameters)) { 
+      r <- vector(mode = "list", length = x$n.chains)
+      for (c in 1:x$n.chains) { 
+         r[[c]] <- cbind(chain = c, sample = x$samples[[c]][-(1:x$n.burn),i])
+      }
+      r <- do.call("rbind", r)
+      
+      p <- ggplot(data = as.data.frame(r), aes(x = sample)) +
+         geom_density() +
+         xlab(x$parameters[i]) + 
+         theme_bw() 
+      
+      if (titles) p <- p + ggtitle(x$parameters[i])
+      if (print) print(p)
+      if (save) ggsave(p, file=paste0("dist-", x$parameters[i], ".png"), 
+                       dpi = 300, width=5, height=3)
+   }
+}
+```
+
+```{r}
+# model not including trust in legal systems (b3)
+model.1 <- sampler(data, init = list(c(1, 0.5, 0.15, 0.014, 0.4), c(2, 0.3, 0.25, 0.014, 0.2)), 
+        parameters = c("b0", "b1", "b2", "b3", "tau"), n.chains = 2, metropolis.hasting = T,
+        b3 = F)
+
+summary(model.1)
+
+plot.lag(model.1)
+
+plot.samples(model.1)
+
+plot.dist(model.1)
+```
+
+```{r}
+# model including trust in legal systems (b3)
+model.2 <- sampler(data, init = list(c(1, 0.5, 0.15, 0.014, 0.4), c(2, 0.3, 0.25, 0.014, 0.2)), 
+        parameters = c("b0", "b1", "b2", "b3", "tau"), n.chains = 2, metropolis.hasting = T,
+        b3 = T)
+
+summary(model.2)
+
+plot.lag(model.2)
+
+plot.samples(model.2)
+
+plot.dist(model.2)
+```
+
+# posterior predictive p-value
+
+```{r}
+# get samples from model including all predictors 
+x.samples <- model.2$samples[[1]][-c(1:model.2$n.burn),]
+x.data <- as.matrix(cbind(1, data[,2:4]))
+
+# compute the leverage of the data points
+leverage <- diag(x.data %*% solve(t(x.data) %*% x.data) %*% t(x.data))
+
+# storage for the test statistics 
+statistics <- matrix(nrow = nrow(x.samples), ncol = 3)
+
+# discrepancy measure for heteroscedacity
+heteroscedacity <- function(predicted, sim.residuals, obs.residuals) {
+   group <- predicted < median(predicted)
+   sim.ratio <- sd(sim.residuals[group]) / sd(sim.residuals[!group])
+   obs.ratio <- sd(obs.residuals[group]) / sd(obs.residuals[!group])
+   return(sim.ratio > obs.ratio)
+}
+
+# discrepancy measure for normality
+normality <- function(sim.residuals, obs.residuals, tau) {
+   residuals.theoretical <- qnorm((1:length(sim.residuals) - 0.5) / length(sim.residuals))
+   sim.residuals.std <- sim.residuals / ((1/sqrt(tau)) * sqrt(1 - leverage) * 2) 
+   obs.residuals.std <- obs.residuals / ((1/sqrt(tau)) * sqrt(1 - leverage) * 2)
+   
+   sim.mean.abs.error <- mean(abs(sort(sim.residuals.std) - residuals.theoretical))
+   obs.mean.abs.error <- mean(abs(sort(obs.residuals.std) - residuals.theoretical))
+   
+   return(sim.mean.abs.error > obs.mean.abs.error)
+}
+
+# discrepancy measure for independence of observations
+independence <- function(predicted, sim.residuals, obs.residuals) {
+   sim.abs.diff <- abs(acf(sim.residuals, plot = F)[["acf"]][5])
+   obs.abs.diff <- abs(acf(obs.residuals, plot = F)[["acf"]][5])
+   
+   return(sim.abs.diff > obs.abs.diff)
+}
+
+# generate 10000 (simulated) data sets and compute discrepancy measures
+for (s in 1:nrow(x.samples)) {
+   if (s %% 1000 == 0) print(sprintf("iteration %d out of %d", s, nrow(x.samples)))
+      
+   predicted <- x.data %*% x.samples[s,1:4]
+   sim.residuals <- rnorm(nrow(x.data),  sd = 1/sqrt(x.samples[s,5]))
+   obs.residuals <- data$y - predicted
+   
+   # compute and store discrepancy measures
+   statistics[s,1] <- heteroscedacity(predicted, sim.residuals, obs.residuals)
+   statistics[s,2] <- normality(sim.residuals, obs.residuals, x.samples[s,5])
+   statistics[s,3] <- independence(predicted, sim.residuals, obs.residuals)
+}
+
+colMeans(statistics)
+```
+
+# deviance information criterion
+
+```{r}
+X <- as.matrix(cbind(1, data[,2:4]))
+y <- as.matrix(data[,1])
+
+loglikelihood <- function(x){
+   likelihood <- dnorm(y, X %*% x[1:4] , sqrt(1/x[5]))
+   log.likelihood <- log(likelihood)
+   return(sum(log.likelihood))
+}
+
+dic <- function(input){
+   eap <- as.vector(apply(input, 2, mean))
+   dbar <- 2 * (loglikelihood(eap) - mean(apply(input, 1, loglikelihood))) 
+   dhat <- -2 * loglikelihood(eap) 
+   dic <- dhat + 2 * dbar
+   return(dic)
+}
+
+# dic for model 1
+dic(model.1$samples[[1]][-c(1:model.1$n.burn),])
+
+# dic for model 2
+dic(model.2$samples[[1]][-c(1:model.1$n.burn),])
+```
+
+# bayes factor
+
+```{r}
+library(bain)
+
+# fit the full model
+fit <- lm(y ~ x1 + x2 + x3, data)
+
+results <- bain(fit, "x1 > x2 = x3 > 0; x1 > x2 > x3 > 0; x1 > x3 > x2 > 0", standardize = FALSE)
+
+# display the results
+print(results)
+
+# obtain the descriptive table
+summary(results, ci = 0.95)
+```
+# frequentist approach 
+
+```{r}
+# full model
+summary(fit)
+plot(fit)
+
+# akaike information criterion
+AIC(fit)
+AIC(lm(y ~ x1 + x2, data))
+
+# normality of residuals
+shapiro.test(fit[["residuals"]])
+
+# heteroscedacity test
+lmtest::bptest(fit)
+
+# inequality comparisons 
+car::linearHypothesis(fit, "x1 = x2")
+car::linearHypothesis(fit, "x1 = x3")
+car::linearHypothesis(fit, "x2 = x3")
+```
+# Appendix EAP residuals
+
+```{r}
+# fitted and residuals values
+x.samples <- model.2$samples[[1]][-c(1:model.2$n.burn),]
+predicted <- x.data %*% apply(x.samples[,1:4], 2, mean)
+residuals <- data$y - predicted
+residuals.theoretical <- qnorm((1:length(residuals) - 0.5) / length(residuals))
+residuals.standardized <- residuals / ((1/sqrt(mean(x.samples[,5]))) * sqrt(1 - leverage) * 2) 
+
+plot(predicted, residuals)
+plot(residuals.theoretical, sort(residuals.standardized))
+```
+
+
+
+
+
+
+
+
+
+
+
+
