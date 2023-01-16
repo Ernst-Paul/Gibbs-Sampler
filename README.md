@@ -1,5 +1,7 @@
 # Bayesian Inference: Prediction of Dutch People’s Trust in Parliament
 
+This repository serves as a data and publication archive for the paper: *[Prediction of Dutch People’s Trust in Parliament](/manuscript/manuscript.pdf)*, written by [Ernst Paul Swens](https://ernst-paul.github.io).
+
 ## Manuscript :notebook:
 The manuscript file can be found in the [`manuscript`](/manuscript/) folder.
 
